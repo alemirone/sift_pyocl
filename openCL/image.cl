@@ -213,6 +213,91 @@ __kernel void local_maxmin(
 
 
 
+
+
+/**
+ * \brief Local  maximum detection in scale space
+ *
+ * IMPORTANT:
+ *	-The output have to be Memset to (-1,-1,-1,-1)
+ *	-This kernel must not be launched with s = 0 or s = nb_of_dogs (=4 for SIFT)
+ *
+ * @param DOGS: Pointer to global memory with ALL the coutiguously pre-allocated Differences of Gaussians
+ * @param border_dist: integer, distance between inner image and borders (SIFT takes 5)
+ * @param peak_thresh: float, threshold (SIFT takes 255.0 * 0.04 / 3.0)
+ * @param InitSigma: float "par.InitSigma" in SIFT (1.6 by default)
+ * @param output: Pointer to global memory output *filled with (-1,-1,-1,-1)* by default for invalid keypoints
+ * @param octsize: initially 1 then twiced at each new octave
+ * @param counter: pointer to the current position in keypoints vector -- shared between threads
+ * @param nb_keypoints: Maximum number of keypoints: size of the keypoints vector
+ * @param scale: the scale in the DoG, i.e the index of the current DoG (this is not the std !)
+ * @param total_width: integer number of columns of ALL the (contiguous) DOGs. We have total_height = height
+ * @param width: integer number of columns of a DOG.
+ * @param height: integer number of lines of a DOG
+
+*/
+
+
+__kernel void local_max(
+	__global float* DOGS,
+	__global keypoint* output,
+	int border_dist,
+	float peak_thresh,
+	float initSigma, 
+	int octsize,
+	__global int* counter,
+	int nb_keypoints,
+	int scale,
+	int width,
+	int height)
+{
+
+	int gid1 = (int) get_global_id(1);
+	int gid0 = (int) get_global_id(0);
+	/*
+		As the DOGs are contiguous, we have to test if (gid0,gid1) is actually in DOGs[s]
+	*/
+
+	if ((gid0 < height - border_dist) && (gid1 < width - border_dist) && (gid0 >= border_dist) && (gid1 >= border_dist)) {
+		int index_dog_prev = (scale-1)*(width*height);
+		int index_dog = scale*(width*height);
+		int index_dog_next = (scale+1)*(width*height);
+
+		float val = DOGS[index_dog+gid0*width + gid1];
+
+		/*
+		The following condition is part of the keypoints refinement: we eliminate the low-contrast points
+		NOTE: "fabsf" instead of "fabs" should be used, for "fabs" if for doubles. Used "fabs" to be coherent with python
+		*/
+		if (fabs(val) > (0.8 * peak_thresh)) {
+
+			int c,r,pos;
+			int ismax = 0;
+			if (val > 0.0) ismax = 1;
+
+			for (c = gid1 - 1; c <= gid1 + 1; c++) {
+				for (r = gid0  - 1; r <= gid0 + 1; r++) {
+					pos = r*width + c;
+					if (ismax == 1) //if (val > 0.0)
+						if (DOGS[index_dog_prev+pos] > val || DOGS[index_dog+pos] > val || DOGS[index_dog_next+pos] > val) ismax = 0;
+				}
+			}
+
+
+			if (ismax == 1) {
+				int old = atomic_inc(counter);
+				keypoint k = 0.0; //no malloc, for this is a float4
+				k.s0 = (float) (gid1*octsize);
+				k.s1 = (float) (gid0*octsize);
+				k.s2 = initSigma * pow(2.0f, (((float) scale) ) / 3.0f)*octsize; //3.0 is "par.Scales";
+				k.s3 = -1 ; 
+				if (old < nb_keypoints) output[old]=k;
+			}
+
+		}//end "value >thresh"
+	}//end "in the inner image"
+}
+
 /**
  * \brief From the (temporary) keypoints, create a vector of interpolated keypoints
  * 			(this is the last step of keypoints refinement)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf8 -*-
+# -*- coding: utf-8 -*-
 #
 #    Project: Sift implementation in Python + OpenCL
 #             https://github.com/kif/sift_pyocl
@@ -311,7 +311,7 @@ class SiftPlan(object):
 
 
 
-    def keypoints(self, image):
+    def keypoints(self, image, just_for_spots=False):
         """
         Calculates the keypoints of the image
         @param image: ndimage of 2D (or 3D if RGB)
@@ -361,7 +361,7 @@ class SiftPlan(object):
 #            pyopencl.enqueue_copy(self.queue, dest=self.buffers[(0, "G_1")].data, src=self.buffers["input"].data)
 
         for octave in range(self.octave_max):
-            kp = self.one_octave(octave)
+            kp = self.one_octave(octave,    just_for_spots=just_for_spots )
             print("in octave %i found %i kp" % (octave, kp.shape[0]))
 
             if kp.shape[0] > 0:
@@ -399,7 +399,7 @@ class SiftPlan(object):
         if self.profile:
             self.events += [("Blur sigma %s octave %s" % (sigma, octave), k1), ("Blur sigma %s octave %s" % (sigma, octave), k2)]
 
-    def one_octave(self, octave):
+    def one_octave(self, octave, just_for_spots=False):
         """
         does all scales within an octave
         @param
@@ -428,19 +428,36 @@ class SiftPlan(object):
                                              *self.scales[octave])
             if self.profile:self.events.append(("DoG %s %s" % (octave, scale), evt))
         for scale in range(1, par.Scales + 1):
-                print("Before local_maxmin, cnt is %s %s %s" % (self.buffers["cnt"].get()[0], self.procsize[octave], self.wgsize[octave]))
-                evt = self.programs["image"].local_maxmin(self.queue, self.procsize[octave], self.wgsize[octave],
-                                                self.buffers[(octave, "DoGs")].data,  # __global float* DOGS,
-                                                self.buffers["Kp_1"].data,  # __global keypoint* output,
-                                                numpy.int32(par.BorderDist),  # int border_dist,
-                                                numpy.float32(par.PeakThresh),  # float peak_thresh,
-                                                octsize,  # int octsize,
-                                                numpy.float32(par.EdgeThresh1),  # float EdgeThresh0,
-                                                numpy.float32(par.EdgeThresh),  # float EdgeThresh,
-                                                self.buffers["cnt"].data,  # __global int* counter,
-                                                kpsize32,  # int nb_keypoints,
-                                                numpy.int32(scale),  # int scale,
-                                                *self.scales[octave])  # int width, int height)
+                if just_for_spots:
+                    evt = self.programs["image"].local_max(self.queue, self.procsize[octave], self.wgsize[octave],
+                                                           self.buffers[(octave, "DoGs")].data,  # __global float* DOGS,
+                                                           self.buffers["Kp_1"].data,  # __global keypoint* output,
+                                                           numpy.int32(par.BorderDist),  # int border_dist,
+                                                           numpy.float32(par.PeakThresh),  # float peak_thresh,
+                                                           numpy.float32(par.InitSigma), 
+                                                           octsize,  # int octsize,
+                                                           self.buffers["cnt"].data,  # __global int* counter,
+                                                           kpsize32,  # int nb_keypoints,
+                                                           numpy.int32(scale),  # int scale,
+                                                           *self.scales[octave])  # int width, int height)
+                    last_start = self.buffers["cnt"].get()[0]
+                    continue
+                else:
+                    print("Before local_maxmin, cnt is %s %s %s" % (self.buffers["cnt"].get()[0], self.procsize[octave], self.wgsize[octave]))
+                    evt = self.programs["image"].local_maxmin(self.queue, self.procsize[octave], self.wgsize[octave],
+                                                              self.buffers[(octave, "DoGs")].data,  # __global float* DOGS,
+                                                              self.buffers["Kp_1"].data,  # __global keypoint* output,
+                                                              numpy.int32(par.BorderDist),  # int border_dist,
+                                                              numpy.float32(par.PeakThresh),  # float peak_thresh,
+                                                              octsize,  # int octsize,
+                                                              numpy.float32(par.EdgeThresh1),  # float EdgeThresh0,
+                                                              numpy.float32(par.EdgeThresh),  # float EdgeThresh,
+                                                              self.buffers["cnt"].data,  # __global int* counter,
+                                                              kpsize32,  # int nb_keypoints,
+                                                              numpy.int32(scale),  # int scale,
+                                                              *self.scales[octave])  # int width, int height)
+
+
                 if self.profile:self.events.append(("local_maxmin %s %s" % (octave, scale), evt))
 #                self.debug_holes("After local_maxmin %s %s" % (octave, scale))
                 procsize = calc_size((self.kpsize,), wgsize)
